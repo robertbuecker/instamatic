@@ -1,22 +1,26 @@
-from . import sed_frame
-from . import cred_frame
-from . import io_frame
-from . import red_frame
-from . import ctrl_frame
-from . import debug_frame
-from . import about_frame
-from . import machine_learning_frame
-from . import autocred_frame
-from . import FEI_RotationCmder
+import importlib
+from instamatic import config
 
-MODULES = (
-io_frame.module,
-cred_frame.module,
-autocred_frame.module,
-sed_frame.module,
-red_frame.module,
-ctrl_frame.module,
-machine_learning_frame.module,
-debug_frame.module,
-about_frame.module,
-FEI_RotationCmder.module )
+all_modules = ( 'cred', 'cred_tvips', 'cred_fei', 'sed', 
+                'autocred', 'red', 'machine_learning', 
+                'ctrl', 'debug', 'about', 'io' )
+
+try:
+    modules = config.cfg.modules
+except AttributeError:
+    modules = []
+else:
+    modules.append('io')  # io is always needed
+    modules = list(dict.fromkeys(modules))  # remove duplicates, but preserve order
+
+if not modules:
+    modules = all_modules
+
+MODULES = []
+
+for module in modules:
+    if module not in all_modules:
+        raise AttributeError(f'No such module: `{module}`, must be in {all_modules}.')
+
+    lib = importlib.import_module('..' + module + '_frame', package=__name__)
+    MODULES.append(lib.module)

@@ -128,7 +128,7 @@ class ModuleFrame(Frame):
 
 class MainFrame(object):
     """docstring for MainFrame"""
-    def __init__(self, root, stream, modules=()):
+    def __init__(self, root, cam, modules=()):
         super(MainFrame, self).__init__()
 
         self.root = root
@@ -136,10 +136,11 @@ class MainFrame(object):
         self.app = ModuleFrame(root, modules=modules)
         self.app.pack(side="top", fill="both", expand=True)
 
-        from .videostream_frame import VideoStreamFrame
+        if cam and cam.streamable:
+            from .videostream_frame import VideoStreamFrame
 
-        self.stream_frame = VideoStreamFrame(root, stream=stream, app=self.app)
-        self.stream_frame.pack(side="top", fill="both", expand=True)
+            self.stream_frame = VideoStreamFrame(root, stream=cam, app=self.app)
+            self.stream_frame.pack(side="top", fill="both", expand=True)
 
         from instamatic import version
 
@@ -183,7 +184,7 @@ def main():
     
     root = Tk()
 
-    gui = MainFrame(root, stream=ctrl.cam, modules=MODULES)
+    gui = MainFrame(root, cam=ctrl.cam, modules=MODULES)
 
     # while not gui.app._modules_have_loaded:
         # time.sleep(0.1)

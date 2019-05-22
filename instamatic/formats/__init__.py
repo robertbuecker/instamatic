@@ -1,9 +1,10 @@
-from .TiffIO import TiffIO
 import time
 import os
 import yaml
 import numpy as np
 from pathlib import Path
+
+import tifffile
 
 from .csvIO import read_csv, write_csv, read_ycsv, write_ycsv, yaml_ordered_load, yaml_ordered_dump
 from .adscimage import write_adsc, read_adsc
@@ -18,11 +19,10 @@ with warnings.catch_warnings():
 from .mrc import read_image as read_mrc
 from .mrc import write_image as write_mrc
 
-
 from .xdscbf import write as write_cbf
 
 
-def read_image(fname):
+def read_image(fname: str) -> (np.array, dict):
     """Guess filetype by extension"""
     ext = Path(fname).suffix.lower()
     if ext in (".tif", ".tiff"):
@@ -38,7 +38,7 @@ def read_image(fname):
     return img, h 
 
 
-def write_tiff(fname, data, header=None):
+def write_tiff(fname: str, data, header: dict=None):
     """Simple function to write a tiff file
 
     fname: str,
@@ -52,15 +52,15 @@ def write_tiff(fname, data, header=None):
     if isinstance(header, dict):
         header = yaml.dump(header)
     if not header:
-        header = "No description"
+        header = ""
 
     fname = Path(fname).with_suffix(".tiff")
 
-    tiffIO = TiffIO(fname, mode="w")
-    tiffIO.writeImage(data, info=header, software="instamatic", date=time.ctime())
+    with tifffile.TiffWriter(fname) as f:
+        f.save(data=data, software="instamatic", description=header)
 
 
-def read_tiff(fname):
+def read_tiff(fname: str) -> (np.array, dict):
     """Simple function to read a tiff file
 
     fname: str,
@@ -70,25 +70,22 @@ def read_tiff(fname):
         image: np.ndarray, header: dict
             a tuple of the image as numpy array and dictionary with all the tem parameters and image attributes
     """
+    tiff = tifffile.TiffFile(fname)
 
-    tiff = TiffIO(fname)
-    img = tiff.getImage(0)
-    header = tiff.getInfo(0)
+    page = tiff.pages[0]
+    img = page.asarray()
 
-    if "imageDescription" in header:
-        try:
-            d = yaml.load(header.get("imageDescription"))
-        except (Exception, ValueError) as e:
-            print("Warning: could not read info from tiff header: {} (input={})".format(e, header.get("imageDescription")))
-        else:
-            if isinstance(d, dict):
-                header.update(d)
-                del header["imageDescription"]
+    if page.software == 'instamatic':
+        header = yaml.load(page.tags["ImageDescription"].value, Loader=yaml.Loader)
+    elif tiff.is_tvips:
+        header = tiff.tvips_metadata
+    else:
+        header = {}
 
     return img, header
 
 
-def write_hdf5(fname, data, header=None):
+def write_hdf5(fname: str, data, header: dict=None):
     """Simple function to write data to hdf5 format using h5py
 
     fname: str,
@@ -108,7 +105,7 @@ def write_hdf5(fname, data, header=None):
     f.close()
  
 
-def read_hdf5(fname):
+def read_hdf5(fname: str) -> (np.array, dict):
     """Simple function to read a hdf5 file written by Instamatic
     
     fname: str,
@@ -125,6 +122,6 @@ def read_hdf5(fname):
     return np.array(f["data"]), dict(f["data"].attrs)
 
 
-def read_cbf(fname):
+def read_cbf(fname: str):
     """CBF reader not implemented"""
     raise NotImplementedError("CBF reader not implemented.")

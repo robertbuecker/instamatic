@@ -6,6 +6,7 @@ from instamatic.processing.flatfield import apply_flatfield_correction
 from instamatic.processing.stretch_correction import affine_transform_ellipse_to_circle
 from instamatic import config
 from instamatic.tools import find_beam_center, find_subranges
+from instamatic.tools import find_beam_center_with_beamstop, to_xds_untrusted_area
 from pathlib import Path
 from math import cos, pi
 import collections
@@ -87,7 +88,7 @@ def get_calibrated_rotation_speed(val):
     was stopped before interrupting the data collection. It uses calibrated values for the 
     rotation speeds of the microscope, and matches them to the observed one"""
 
-    rotation_speeds = set(config.microscope.specifications["rotation_speeds"]["coarse"] + config.microscope.specifications["rotation_speeds"]["fine"])
+    rotation_speeds = set(config.microscope.rotation_speeds["coarse"] + config.microscope.rotation_speeds["fine"])
     calibrated_value = min(rotation_speeds, key=lambda x:abs(x-val))
     logger.info("Correcting oscillation angle from {:.3f} to calibrated value {:.3f}".format(val, calibrated_value))
     return calibrated_value
@@ -131,6 +132,8 @@ class ImgConversion(object):
             else:
                 self.data[i] = img
 
+        self.untrusted_areas = []
+
         self.observed_range = set(self.data.keys())
         self.complete_range = set(range(min(self.observed_range), max(self.observed_range) + 1))
         self.missing_range = self.observed_range ^ self.complete_range
@@ -146,10 +149,10 @@ class ImgConversion(object):
         self.physical_pixelsize = config.camera.physical_pixelsize # mm
         self.wavelength = config.microscope.wavelength # angstrom
         # NOTE: Stretch correction - not sure if the azimuth and amplitude are correct anymore.
+        self.do_stretch_correction = True
         self.stretch_azimuth = config.camera.stretch_azimuth
         self.stretch_amplitude = config.camera.stretch_amplitude
 
-        self.mean_beam_center, self.beam_center_std = self.get_beam_centers()
         self.distance = (1/self.wavelength) * (self.physical_pixelsize / self.pixelsize)
         self.osc_angle = osc_angle
         self.start_angle = start_angle
@@ -159,15 +162,75 @@ class ImgConversion(object):
         self.acquisition_time = acquisition_time
         self.rotation_speed = get_calibrated_rotation_speed(osc_angle / self.acquisition_time) 
 
+        self.name = "Instamatic"
+
+        from .XDS_template import XDS_template  # hook XDS_template here, because it is difficult to override as a global
+        self.XDS_template = XDS_template
+
+        self.check_settings()  # check if all required parameters are present, and fill default values if needed
+
+        self.mean_beam_center, self.beam_center_std = self.get_beam_centers()
         logger.debug("Primary beam at: {}".format(self.mean_beam_center))
 
+    def check_settings(self) -> None:
+        """
+        Check for the presence of all required attributes. 
+        If possible, optional missing attributes are set to their defaults.
+        """
+
+        kw_attrs = {
+            "name": "instamatic",
+            "use_beamstop": False,
+            "untrusted_areas": [],
+            "smv_subdrc": "data",
+            "do_stretch_correction": False
+        }
+
+        for attr, default in kw_attrs.items():
+            if not hasattr(self, attr):
+                print(f"self.{attr} = {default}")
+                setattr(self, attr, default)
+
+        attrs = [
+        "rotation_speed",
+        "acquisition_time",
+        "start_angle",
+        "end_angle",
+        "osc_angle",
+        "distance",
+        "mean_beam_center",
+        "wavelength",
+        "physical_pixelsize",
+        "pixelsize",
+        "data_shape",
+        "missing_range",
+        "complete_range",
+        "observed_range",
+        "headers",
+        "data",
+        "XDS_template"
+        ]
+
+        for attr in attrs:
+            if not hasattr(self, attr):
+                raise AttributeError(f"`{self.__class__.__name__}` has no attribute `{attr}`")
+
+        if self.do_stretch_correction:
+            stretch_attrs = ("stretch_amplitude", "stretch_azimuth")
+            if not all(hasattr(self, attr) for attr in stretch_attrs):
+                raise AttributeError(f"`{self.__class__.__name__}` is missing stretch attrs `{stretch_attrs[0]}/{stretch_attrs[1]}`")
+
+
     def get_beam_centers(self) -> (float, float):
-        """Obtain beam centers from the diffractoin data
+        """Obtain beam centers from the diffraction data
         Returns a tuple with the median beam center and its standard deviation
         """
         centers = []
         for i, h in self.headers.items():
-            center = find_beam_center(self.data[i], sigma=10)
+            if self.use_beamstop:
+                center = find_beam_center_with_beamstop(self.data[i], z=99)
+            else:
+                center = find_beam_center(self.data[i], sigma=10)
             h["beam_center"] = center
             centers.append(center)
 
@@ -351,6 +414,11 @@ class ImgConversion(object):
         # For now, use the average beam center and consider it stationary, remove this line later
         mean_beam_center = self.mean_beam_center
         
+        try:
+            date = str(datetime.fromtimestamp(h["ImageGetTime"]))
+        except:
+            date = "0"
+
         header = collections.OrderedDict()
         header['HEADER_BYTES'] = 512
         header['DIM'] = 2
@@ -363,9 +431,9 @@ class ImgConversion(object):
         header['BIN_TYPE'] = "HW"
         header['ADC'] = "fast"
         header['CREV'] = 1
-        header['BEAMLINE'] = "TimePix_SU"   # special ID for DIALS
+        header['BEAMLINE'] = self.name      # special ID for DIALS
         header['DETECTOR_SN'] = 901         # special ID for DIALS
-        header['DATE'] = str(datetime.fromtimestamp(h["ImageGetTime"]))
+        header['DATE'] = date
         header['TIME'] = str(h["ImageExposureTime"])
         header['DISTANCE'] = "{:.4f}".format(self.distance)
         header['TWOTHETA'] = 0.00
@@ -410,8 +478,14 @@ class ImgConversion(object):
         """Write .ed3d input file for REDp in directory `path`"""
         path.mkdir(exist_ok=True)
 
-        rotation_axis = np.degrees(self.rotation_axis)
+        omega = np.degrees(self.rotation_axis)
 
+        # for red, -180 <= omega <= 180
+        if omega < -180:
+            omega += 360
+        elif omega > 180:
+            omega -= 360
+    
         if self.start_angle > self.end_angle:
             sign = -1
         else:
@@ -419,7 +493,7 @@ class ImgConversion(object):
 
         with open(path / "1.ed3d", 'w') as f:
             print(f"WAVELENGTH    {self.wavelength}", file=f)
-            print(f"ROTATIONAXIS    {rotation_axis:5f}", file=f)
+            print(f"ROTATIONAXIS    {omega:5f}", file=f)
             print(f"CCDPIXELSIZE    {self.pixelsize:5f}", file=f)
             print(f"GONIOTILTSTEP    {self.osc_angle:5f}", file=f)
             print(f"BEAMTILTSTEP    0", file=f)
@@ -440,7 +514,6 @@ class ImgConversion(object):
         
     def write_xds_inp(self, path: str) -> None:
         """Write XDS.INP input file for XDS in directory `path`"""
-        from .XDS_template import XDS_template
 
         path.mkdir(exist_ok=True)
 
@@ -451,24 +524,35 @@ class ImgConversion(object):
 
         shape_x, shape_y = self.data_shape
 
-        self.write_geometric_correction_files(path)
+        if self.do_stretch_correction:
+            self.write_geometric_correction_files(path)
+            stretch_correction = "DETECTOR= PILATUS      ! Pretend to be PILATUS detector to enable geometric corrections\nX-GEO_CORR= XCORR.cbf  ! X stretch correction\nY-GEO_CORR= YCORR.cbf  ! Y stretch correction\n"
+        else:
+            stretch_correction=""
 
         if self.missing_range:
             exclude = "\n".join(["EXCLUDE_DATA_RANGE={} {}".format(i, j) for i, j in find_subranges(self.missing_range)])
         else:
             exclude = "!EXCLUDE_DATA_RANGE="
 
-        s = XDS_template.format(
+        untrusted_areas = ""
+
+        for kind, coords in self.untrusted_areas:
+            untrusted_areas += to_xds_untrusted_area(kind, coords) + "\n"
+
+        s = self.XDS_template.format(
             date=str(time.ctime()),
             data_drc=self.smv_subdrc,
             data_begin=1,
             data_end=nframes,
             exclude=exclude,
+            stretch_correction=stretch_correction,
             starting_angle=self.start_angle,
             wavelength=self.wavelength,
             # reverse XY coordinates for XDS
             origin_x=self.mean_beam_center[1],
             origin_y=self.mean_beam_center[0],
+            untrusted_areas=untrusted_areas,
             NX=shape_y,
             NY=shape_x,
             sign="+",
@@ -487,22 +571,30 @@ class ImgConversion(object):
         
         logger.info("XDS INP file created.")
 
-    def write_beam_centers(self, drc: str) -> None:
-        """Write list of beam centers to file `beam_centers.txt` in `drc`"""
+    def write_beam_centers(self, path: str) -> None:
+        """Write list of beam centers to file `beam_centers.txt` in `path`"""
         centers = np.zeros((max(self.observed_range), 2), dtype=np.float)
         for i, h in self.headers.items():
             centers[i-1] = h["beam_center"]
         for i in self.missing_range:
             centers[i-1] = [np.NaN, np.NaN]
 
-        np.savetxt(drc / "beam_centers.txt", centers, fmt="%10.4f")
+        np.savetxt(path / "beam_centers.txt", centers, fmt="%10.4f")
 
-    def write_pets_inp(self, path: str) -> None:
+    def write_pets_inp(self, path: str, tiff_path: str="tiff") -> None:
         """Write PETS input file `pets.pts` in directory `path`"""
         if self.start_angle > self.end_angle:
             sign = -1
         else:
             sign = 1
+
+        omega = np.degrees(self.rotation_axis)
+
+        # for pets, 0 <= omega <= 360
+        if omega < 0:
+            omega += 360
+        elif omega > 360:
+            omega -= 360 
 
         with open(path / "pets.pts", "w") as f:
             date = str(time.ctime())
@@ -514,7 +606,7 @@ class ImgConversion(object):
             print(f"lambda {self.wavelength}", file=f)
             print(f"Aperpixel {self.pixelsize}", file=f)
             print(f"phi 0.0", file=f)
-            print(f"omega {np.degrees(self.rotation_axis + np.pi*2)}", file=f)
+            print(f"omega {omega}", file=f)
             print(f"bin 1", file=f)
             print(f"reflectionsize 20", file=f)
             print(f"noiseparameters 3.5 38", file=f)
@@ -529,6 +621,19 @@ class ImgConversion(object):
             for i in self.observed_range:
                 fn = "{:05d}.tiff".format(i)
                 angle = self.start_angle+sign*self.osc_angle*i
-                print(f"tiff/{fn} {angle:10.4f} 0.00", file=f)
+                print(f"{tiff_path}/{fn} {angle:10.4f} 0.00", file=f)
             print("endimagelist", file=f)
-            
+      
+    def write_REDp_shiftcorrection(self, path: str) -> None:
+        """Write .sc (shift correction) file for REDp in directory `path`"""
+        path.mkdir(exist_ok=True)
+
+        cx, cy = self.mean_beam_center
+        with open(path / "shifts.sc", "w") as f:
+            print(f" {cy:.2f} {cx:.2f}", file=f)  # cx/cy must be switched around, y first
+            for i in self.observed_range:
+                print(f"{i:4d}{0:8.2f}{0:8.2f}", file=f)
+
+    def add_beamstop(self, rect):
+        """rect must be a 2x4 coordinate array"""
+        self.untrusted_areas.append(("quadrilateral", rect))

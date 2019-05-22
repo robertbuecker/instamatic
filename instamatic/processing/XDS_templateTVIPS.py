@@ -94,7 +94,7 @@ INCIDENT_BEAM_DIRECTION= 0 0 1        !The vector points from the source towards
 
 !NBX=7  NBY=7            ! 3 is default, used to estimate the expected variation in a data image, see GAIN.cbf
 !BACKGROUND_PIXEL= 6.0   ! Background pixel belongs to background if variation less than given esds
-!STRONG_PIXEL= 3.0       ! Strong pixel must exceed background by more than number of given esds
+STRONG_PIXEL= 6.0       ! Strong pixel must exceed background by more than number of given esds
 !MAXIMUM_NUMBER_OF_STRONG_PIXELS= 1500000 ! Approximate upper limit for the total number of 'strong' pixels
 !MINIMUM_NUMBER_OF_PIXELS_IN_A_SPOT= 6    ! Used to suppress spurious, isolated 'strong' pixels from entering the spot list
 !SPOT_MAXIMUM-CENTROID= 3.0               ! Maximum deviation of spot maximum from spot centroid
@@ -108,6 +108,6 @@ INCIDENT_BEAM_DIRECTION= 0 0 1        !The vector points from the source towards
 
 ! ********** Indexing **********
 
-MINIMUM_FRACTION_OF_INDEXED_SPOTS= 0.25    ! 0.50 is default.
+!MINIMUM_FRACTION_OF_INDEXED_SPOTS= 0.25    ! 0.50 is default.
 !MAXIMUM_ERROR_OF_SPOT_POSITION=6.0        ! 3.0 is default
 """

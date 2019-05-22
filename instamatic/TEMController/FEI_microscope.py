@@ -161,9 +161,9 @@ class FEIMicroscope(object):
 
         self.FunctionMode_value = 0
 
-        self.MAGNIFICATIONS      = config.microscope.specifications["MAGNIFICATIONS"]
-        self.MAGNIFICATION_MODES = config.microscope.specifications["MAGNIFICATION_MODES"]
-        self.CAMERALENGTHS       = config.microscope.specifications["CAMERALENGTHS"]
+        self.MAGNIFICATIONS      = config.microscope.magnifications
+        self.MAGNIFICATION_MODES = config.microscope.magnification_modes
+        self.CAMERALENGTHS       = config.microscope.cameralengths
         
         self.goniostopped = self.stage.Status
         
@@ -432,15 +432,14 @@ class FEIMicroscope(object):
     
     def getDiffShift(self):
         """To be tested"""
-        """if self.tom.Projection.Mode != 1:
+        if self.proj.Mode != 1:
             return (0, 0)
         
-        return self.tom.Projection.DiffractionShift.X,self.tom.Projection.DiffractionShift.Y"""
-        return (0, 0)
+        return self.proj.DiffractionShift.X,self.proj.DiffractionShift.Y
         
     def setDiffShift(self, x, y):
         """To be tested"""
-        """ds = self.tom.Projection.DiffractionShift
+        ds = self.proj.DiffractionShift
         if x > 1 or y > 1 or x < -1 or y < -1:
             print("Invalid PLA setting: can only be float numbers between -1 and 0.")
             return
@@ -451,8 +450,7 @@ class FEIMicroscope(object):
         if y is not None:
             ds.Y = y
         
-        self.tom.Projection.DiffractionShift = ds"""
-        pass
+        self.proj.DiffractionShift = ds
 
     def releaseConnection(self):
         comtypes.CoUninitialize()

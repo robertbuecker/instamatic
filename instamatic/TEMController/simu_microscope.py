@@ -68,9 +68,9 @@ class SimuMicroscope(object):
         self.DiffractionShift_y = random.randint(MIN, MAX)
 
         self.name = name
-        self.MAGNIFICATIONS      = config.microscope.specifications["MAGNIFICATIONS"]
-        self.MAGNIFICATION_MODES = config.microscope.specifications["MAGNIFICATION_MODES"]
-        self.CAMERALENGTHS       = config.microscope.specifications["CAMERALENGTHS"]
+        self.MAGNIFICATIONS      = config.microscope.magnifications
+        self.MAGNIFICATION_MODES = config.microscope.magnification_modes
+        self.CAMERALENGTHS       = config.microscope.cameralengths
 
         self.FUNCTION_MODES = FUNCTION_MODES
         self.NTRLMAPPING = NTRLMAPPING
@@ -238,7 +238,7 @@ class SimuMicroscope(object):
     def stopStage(self):
         pass
 
-    def setStagePosition(self, x: int=None, y: int=None, z: int=None, a: int=None, b: int=None, wait: bool=True):
+    def setStagePosition(self, x: int=None, y: int=None, z: int=None, a: int=None, b: int=None, speed: float= -1, wait: bool=True):
         if z is not None:
             self.setStageZ(z, wait=wait)
         if a is not None:

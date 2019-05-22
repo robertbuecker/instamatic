@@ -8,12 +8,22 @@ from instamatic.camera import Camera
 from .microscope import Microscope
 
 from typing import Tuple
+from contextlib import contextmanager
+from collections import namedtuple
 import numpy as np
 
 
+_ctrl = None  # store reference of ctrl so it can be accessed without re-initializing
+
 default_cam = config.camera.name
 default_tem = config.microscope.name
-use_server  = config.cfg.use_tem_server
+
+use_tem_server = config.cfg.use_tem_server
+use_cam_server = config.cfg.use_cam_server
+
+
+class TEMControllerException(Exception):
+    pass
 
 
 def initialize(tem_name: str=default_tem, cam_name: str=default_cam, stream: bool=True) -> "TEMController":
@@ -24,19 +34,46 @@ def initialize(tem_name: str=default_tem, cam_name: str=default_cam, stream: boo
     stream: Open the camera as a stream (this enables `TEMController.show_stream()`)
     """
 
-    print(f"Microscope: {tem_name}{' (server)' if use_server else ''}")
-    print(f"Camera    : {cam_name}{' (stream)' if (cam_name and stream) else ''}")
-
-    tem = Microscope(tem_name, use_server=use_server)
+    print(f"Microscope: {tem_name}{' (server)' if use_tem_server else ''}")
+    tem = Microscope(tem_name, use_server=use_tem_server)
     
     if cam_name:
-        cam = Camera(cam_name, as_stream=stream)
+        if use_cam_server:
+            cam_tag = ' (server)'
+        elif stream:
+            cam_tag = ' (stream)'
+        else:
+            cam_tag = ''
+
+        print(f"Camera    : {cam_name}{cam_tag}")
+
+        cam = Camera(cam_name, as_stream=stream, use_server=use_cam_server)
     else:
         cam = None
 
-    ctrl = TEMController(tem=tem, cam=cam)
+    global _ctrl
+    ctrl = _ctrl = TEMController(tem=tem, cam=cam)
 
     return ctrl
+
+
+def get_instance() -> "TEMController":
+    """Gets the current `ctrl` instance if it has been initialized, otherwise
+    initialize it using default parameters"""
+
+    global _ctrl
+    
+    if _ctrl:
+        ctrl = _ctrl
+    else:
+        ctrl = _ctrl = initialize()
+
+    return ctrl
+
+
+# namedtuples to store results from .get()
+StagePositionTuple = namedtuple("StagePositionTuple", ["x", "y", "z", "a", "b"])
+DeflectorTuple = namedtuple("DeflectorTuple", ["x", "y"])
 
 
 class Deflector(object):
@@ -61,7 +98,7 @@ class Deflector(object):
         self._setter(x, y)
 
     def get(self) -> Tuple[int, int]:
-        return self._getter()
+        return DeflectorTuple(*self._getter())
 
     @property
     def x(self) -> int:
@@ -136,12 +173,37 @@ class DiffFocus(Lens):
         super().__init__(tem=tem)
         self._getter = self._tem.getDiffFocus
         self._setter = self._tem.setDiffFocus
+        self.is_defocused = False
 
     def set(self, value: int, confirm_mode: bool=True):
         """confirm_mode: verify that TEM is set to the correct mode ('diff').
             IL1 maps to different values in image and diffraction mode. 
             Turning it off results in a 2x speed-up in the call, but it will silently fail if the TEM is in the wrong mode."""
         self._setter(value, confirm_mode=confirm_mode)
+
+    def defocus(self, offset):
+        """Apply a defocus to the IL1 lens, use `.refocus` to restore the previous setting"""
+        if self.is_defocused:
+            raise TEMControllerException(f"{self.__class__.__name__} is already defocused!")
+
+        try:
+            self._focused_value = current = self.get()
+        except ValueError:
+            self._tem.setFunctionMode("diff")
+            self._focused_value = current = self.get()
+
+        target = current + offset
+        self.set(target)
+        self.is_defocused = True
+        print(f"Defocusing from {current} to {target}")
+
+    def refocus(self):
+        """Restore the IL1 lens to the focused condition a defocus has been applied using `.defocus`"""
+        if self.is_defocused:
+            target = self._focused_value
+            self.set(target)
+            self.is_defocused = False
+            print(f"Refocusing to {target}")
 
 
 class Brightness(Lens):
@@ -274,6 +336,7 @@ class StagePosition(object):
         self._tem = tem
         self._setter = self._tem.setStagePosition
         self._getter = self._tem.getStagePosition
+        self._wait = True  # properties only
         
     def __repr__(self):
         x, y, z, a, b = self.get()
@@ -284,18 +347,23 @@ class StagePosition(object):
         return self.__class__.__name__
 
     def set(self, x: int=None, y: int=None, z: int=None, a: int=None, b: int=None, wait: bool=True):
-        """wait: bool, block until stage movement is complete"""
+        """wait: bool, block until stage movement is complete (JEOL only)"""
         self._setter(x, y, z, a, b, wait=wait)
         
     def set_with_speed(self, x: int=None, y: int=None, z: int=None, a: int=None, b: int=None, wait: bool=True, speed: float=1.0):
-        """wait: bool, block until stage movement is complete"""
+        """
+        wait: bool, block until stage movement is complete (JEOL only)
+        speed: float, set stage rotation with specified speed (FEI only)
+        """
         self._setter(x, y, z, a, b, wait=wait, speed=speed)
         
-    def setspeed(self, speed = 1):
-        self._tem.setStageSpeed(value = 1)
+    def setspeed(self, speed=1):
+        """Sets the stage (rotation) movement speed on the TEM (FEI only)"""
+        self._tem.setStageSpeed(value=1)
         
     def get(self) -> Tuple[int, int, int, int, int]:
-        return self._getter()
+        """Get stage positions; x, y, z, and status of the rotation axes; a, b"""
+        return StagePositionTuple(*self._getter())
 
     @property
     def x(self) -> int:
@@ -304,7 +372,7 @@ class StagePosition(object):
 
     @x.setter
     def x(self, value: int):
-        self.set(x=value)
+        self.set(x=value, wait=self._wait)
 
     @property
     def y(self) -> int:
@@ -319,11 +387,11 @@ class StagePosition(object):
     @xy.setter
     def xy(self, values: Tuple[int, int]):
         x, y = values
-        self.set(x=x, y=y)
+        self.set(x=x, y=y, wait=self._wait)
 
     @y.setter
     def y(self, value: int):
-        self.set(y=value)
+        self.set(y=value, wait=self._wait)
 
     def move_in_projection(self, delta_x: int, delta_y: int):
         r"""y and z are always perpendicular to the sample stage. To achieve the movement
@@ -361,7 +429,7 @@ class StagePosition(object):
 
     @z.setter
     def z(self, value: int):
-        self.set(z=value)
+        self.set(z=value, wait=self._wait)
 
     @property
     def a(self) -> int:
@@ -370,7 +438,7 @@ class StagePosition(object):
 
     @a.setter
     def a(self, value: int):
-        self.set(a=value)
+        self.set(a=value, wait=self._wait)
 
     @property
     def b(self) -> int:
@@ -379,7 +447,7 @@ class StagePosition(object):
 
     @b.setter
     def b(self, value: int):
-        self.set(b=value)
+        self.set(b=value, wait=self._wait)
 
     def neutral(self) -> None:
         """Reset the position of the stage to the 0-position"""
@@ -389,9 +457,51 @@ class StagePosition(object):
         """Return 'True' if the stage is moving"""
         return self._tem.isStageMoving()
 
+    def wait_for_stage(self) -> None:
+        """Blocking call that waits for stage movement to finish"""
+        self._tem.waitForStage()
+
+    @contextmanager
+    def no_wait(self):
+        """
+        Context manager that prevents blocking stage position calls on properties.
+
+        Usage:
+            with ctrl.stageposition.no_wait():
+                ctrl.stageposition.x += 1000
+                ctrl.stageposition.y += 1000
+        """
+        self._wait = False
+        yield
+        self._wait = True
+
     def stop(self) -> None:
         """This will halt the stage preemptively if `wait=False` is passed to StagePosition.set"""
         self._tem.stopStage()
+
+    def alpha_wobbler(self, delta: float=5.0, event=None) -> None:
+        """Tilt the stage by plus/minus the value of delta (degrees)
+        If event is not set, press Ctrl-C to interrupt"""
+
+        a_center = self.a
+        print(f"Wobbling 'alpha': {a_center:.2f}±{delta:.2f}")
+
+        if event:
+            while not event.is_set():
+                self.a = a_center + delta
+                self.a = a_center - delta
+        else:
+            print("(press 'Ctrl-C' to interrupt)")
+            try:
+                while True:
+                    self.a = a_center + delta
+                    self.a = a_center - delta
+            except KeyboardInterrupt:
+                pass
+
+        print(f"Restoring 'alpha': {a_center:.2f}")
+        self.a = a_center
+        print(f"Print z={self.z:.2f}")
 
 
 class TEMController(object):
@@ -445,6 +555,28 @@ class TEMController(object):
 
     def mode_diffraction(self):
         self.tem.setFunctionMode("diff")
+
+    @property
+    def screen(self):
+        """Returns one of 'up', 'down'"""
+        self.tem.getScreenPosition()
+
+    @screen.setter
+    def screen(self, value: str):
+        """Should be one of 'up', 'down'"""
+        self.tem.setScreenPosition(value)
+
+    def screen_up(self):
+        self.tem.setScreenPosition("up")
+
+    def screen_down(self):
+        self.tem.setScreenPosition("down")
+
+    def beamblank_on(self):
+        self.tem.setBeamBlank(True)
+
+    def beamblank_off(self):
+        self.tem.setBeamBlank(False)
 
     @property
     def mode(self):

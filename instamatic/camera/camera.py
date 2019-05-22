@@ -9,7 +9,26 @@ __all__ = ["Camera"]
 default_cam = config.camera.name
 
 
-def Camera(name: str=None, as_stream: bool=False):
+def get_cam(name: str=None):
+    """Grabs the camera object defined by `name`"""
+
+    if name == "simulate":
+        from .camera_simu import CameraSimu as cam
+    elif name == "simulateDLL":
+        from .camera_gatan import CameraDLL as cam
+    elif name in ("orius", "gatan"):
+        from .camera_gatan import CameraDLL as cam
+    elif name in ("timepix", "pytimepix"):
+        from . import camera_timepix as cam
+    elif name in ("emmenu", "tvips"):
+        from .camera_emmenu import CameraEMMENU as cam
+    else:
+        raise ValueError(f"No such camera: {name}")
+
+    return cam
+
+
+def Camera(name: str=None, as_stream: bool=False, use_server: bool=False):
     """Initialize the camera identified by the 'name' parameter
     if `as_stream` is True, it will return a VideoStream object
     if `as_stream` is False, it will return the raw Camera object
@@ -17,26 +36,26 @@ def Camera(name: str=None, as_stream: bool=False):
     if name == None:
         name = default_cam
     elif name != config.cfg.camera:
-        config.load_cfg(camera_name=name)
+        config.load(camera_name=name)
         name = config.cfg.camera
 
-    if name == "simulate":
-        from .camera_simu import CameraSimu
-        cam = CameraSimu(name)
-    elif name == "simulateDLL":
-        from .camera_gatan import CameraDLL
-        cam = CameraDLL(name)
-    elif name in ("orius", "gatan"):
-        from .camera_gatan import CameraDLL
-        cam = CameraDLL("gatan")
-    elif name in ("timepix", "pytimepix"):
-        from . import camera_timepix
-        tpx_config = Path(__file__).parent / "tpx" / "config.txt"
-        cam = camera_timepix.initialize(tpx_config)
+    if use_server:
+        from .camera_server import ServerCam
+        cam = ServerCam(name)
+        as_stream = False  # precaution
     else:
-        raise ValueError(f"No such camera: {name}")
+        cam_cls = get_cam(name)
 
-    if  as_stream:
+        if name in ("timepix", "pytimepix"):
+            tpx_config = Path(__file__).parent / "tpx" / "config.txt"  # TODO: put this somewhere central
+            cam = cam_cls(tpx_config)
+        elif name in ("emmenu", "tvips"):
+            cam = cam_cls()
+            as_stream = False  # override `as_stream` for this interface
+        else:
+            cam = cam_cls()
+
+    if as_stream:
         if cam.streamable:
             from .videostream import VideoStream
         else:
