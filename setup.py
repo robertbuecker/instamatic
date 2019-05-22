@@ -13,7 +13,7 @@ def read(fname):
 try:
     long_description = read('README.rst')
 except IOError:
-    long_description = read('README.md')
+    long_description = read('readme.md')
 
 setup(
     name=__title__,
