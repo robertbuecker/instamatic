@@ -194,11 +194,20 @@ class CameraEMMENU(object):
         return np.array(arr)
 
     def getDimensions(self) -> (int, int):
+        """alias to getImageDimensions"""
+        return self.getImageDimensions()
+
+    def getCameraDimensions(self) -> (int, int):
         """Get the maximum dimensions reported by the camera"""
         # cfg = self.getCurrentConfig()
         # return cfg.DimensionX, cfg.DimensionY
         return self._cam.RealSizeX, self._cam.RealSizeY
         # return self._cam.MaximumSizeX, self._cam.MaximumSizeY
+
+    def getImageDimensions(self) -> (int, int):
+        """Get the dimensions of the image"""
+        bin_x, bin_y = self.getBinning()
+        return int(self._cam.RealSizeX / bin_x), int(self._cam.RealSizeY / bin_y)
 
     def getPhysicalPixelsize(self) -> (int, int):
         """Returns the physical pixel size of the camera nanometers"""
@@ -225,12 +234,21 @@ class CameraEMMENU(object):
         the given `path` using EMMENU machinery"""
         path = Path(path)
         drc_index = self.drc_index
-        for i, image_index in enumerate(range(start_index, stop_index+1)):
+
+        if stop_index <= start_index:
+            raise IndexError(f"`stop_index`: {stop_index} >= `start_index`: {start_index}")
+
+        for i, image_index in enumerate(range(start_index, stop_index)):
             p = self.getImageByIndex(image_index, drc_index)
+
             fn = str(path / f"{i:04d}.tiff")
             print(f"Image #{image_index} -> {fn}")
+            
+            # TODO: wrap writeTiff in try/except
+            # writeTiff causes vague error if image does not exist
+
             self.writeTiff(p, fn)
-    
+
             if clear_buffer:
                 # self._immgr.DeleteImageBuffer(drc_index, image_index)  # does not work on 3200
                 self._emi.DeleteImage(p)  # also clears from buffer
@@ -286,10 +304,13 @@ class CameraEMMENU(object):
 
     def start_liveview(self, delay=3.0) -> None:
         print("Start live view")
-        self._vp.StartContinuous()
-
-        # sleep for a few seconds to ensure live view is running
-        time.sleep(delay)
+        try:
+            self._vp.StartContinuous()
+        except comtypes.COMError as e:
+            print(f"{e.details[1]}: {e.details[0]}")
+        else:
+            # sleep for a few seconds to ensure live view is running
+            time.sleep(delay)
 
     def set_exposure(self, exposure_time: int) -> None:
         """Set exposure time in ms"""

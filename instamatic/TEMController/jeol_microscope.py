@@ -60,12 +60,13 @@ class JeolMicroscope(object):
         self.tem3 = comtypes.client.CreateObject(temext.TEM3, comtypes.CLSCTX_ALL)
 
         # initialize each interface from the TEM3 object
-        # self.apt3 = self.tem3.CreateApt3()
         # self.camera3 = self.tem3.CreateCamera3()
         # self.detector3 = self.tem3.CreateDetector3()
         # self.feg3 = self.tem3.CreateFEG3()
         # self.filter3 = self.tem3.CreateFilter3()
+        # self.gun3 = self.tem3.CreateGun3()
         # self.mds3 = self.tem3.CreateMDS3()
+        self.apt3 = self.tem3.CreateApt3()
         self.screen2 = self.tem3.CreateScreen2()
         self.def3 = self.tem3.CreateDef3()
         self.eos3 = self.tem3.CreateEOS3()
@@ -98,13 +99,19 @@ class JeolMicroscope(object):
         self._y_direction = 0
 
         self.name = name
-        self.MAGNIFICATIONS      = config.microscope.magnifications
-        self.MAGNIFICATION_MODES = config.microscope.magnification_modes
-        self.CAMERALENGTHS       = config.microscope.cameralengths
 
         self.FUNCTION_MODES = FUNCTION_MODES
         self.NTRLMAPPING = NTRLMAPPING
 
+        for mode in self.FUNCTION_MODES:
+            attrname = f"range_{mode}"
+            try:
+                rng = getattr(config.microscope, attrname)
+            except AttributeError:
+                print(f"Warning: No magnfication ranges were found for mode `{mode}` in the config file")
+            else:
+                setattr(self, attrname, rng)
+        
         self.ZERO = ZERO
         self.MAX = MAX
         self.MIN = MIN
@@ -121,8 +128,24 @@ class JeolMicroscope(object):
                 arg = self.NTRLMAPPING[arg]
             self.def3.setNTRL(arg)
 
-    def getHTValue(self):
-        return self.ht3.GetHTValue()
+    def getHTValue(self) -> int:
+        """Get the accelaration voltage in V"""
+        value, status = self.ht3.GetHTValue()
+        return value
+
+    def getHTRange(self) -> list:
+        """Get accelation voltage range (max, min) in V"""
+        *value, status = self.ht3.GetHtRange()
+        return value
+
+    def setBeamValve(self, switch: bool):
+        """Open (switch=True) or close (switch=False)"""
+        self.feg3.SetBeamValve(switch)
+
+    def getBeamValve(self) -> bool:
+        """Get the beam valve status"""
+        value, result = self.feg3.GetBeamValve()
+        return bool(value)
 
     def getBrightness(self) -> int:
         value, result = self.lens3.GetCL3()
@@ -139,49 +162,77 @@ class JeolMicroscope(object):
         current_mode = self.getFunctionMode()
         
         if current_mode == "diff":
-            if value not in self.CAMERALENGTHS:
-                value = min(self.CAMERALENGTHS, key=lambda x: abs(x-value))
-            selector = self.CAMERALENGTHS.index(value)
-            self.eos3.SetSelector(selector) 
-        else:
-            if value not in self.MAGNIFICATIONS:
-                value = min(self.MAGNIFICATIONS, key=lambda x: abs(x-value))
-            
-            # get best mode for magnification
-            for k in sorted(self.MAGNIFICATION_MODES.keys(), key=self.MAGNIFICATION_MODES.get): # sort by values
-                v = self.MAGNIFICATION_MODES[k]
-                if v <= value:
-                    new_mode = k
-    
-            if current_mode != new_mode:
-                self.setFunctionMode(new_mode)
-    
-            # calculate index
-            selector = self.MAGNIFICATIONS.index(value) - self.MAGNIFICATIONS.index(self.MAGNIFICATION_MODES[new_mode])
-                    
-            # self.eos3.SetMagValue(value)
-            self.eos3.SetSelector(selector) 
+            if value not in self.range_diff:
+                raise IndexError(f"No such camera length: {value}")
+            selector = self.range_diff.index(value)
+        elif current_mode == "lowmag":
+            if value not in self.range_lowmag:
+                raise IndexError(f"No such `lowmag` magnification: {value}")
+            selector = self.range_lowmag.index(value)
+        elif current_mode == "samag":
+            if value not in self.range_samag:
+                raise IndexError(f"No such `samag` magnification: {value}")
+            selector = self.range_samag.index(value)
+        elif current_mode == "mag1":
+            if value not in self.range_mag1:
+                raise IndexError(f"No such `mag1` magnification: {value}")
+            selector = self.range_mag1.index(value)
+        elif current_mode == "mag2":
+            if value not in self.range_mag2:
+                raise IndexError(f"No such `mag2` magnification: {value}")
+            selector = self.range_mag2.index(value)
+        self.eos3.SetSelector(selector) 
 
     def getMagnificationIndex(self) -> int:
         value = self.getMagnification()
         current_mode = self.getFunctionMode()
-        try:
-            if current_mode == "diff":
-                return self.CAMERALENGTHS.index(value) + 1
-            else:
-                return self.MAGNIFICATIONS.index(value)
-        except Exception:
-            raise ValueError("getMagnificationIndex - invalid magnification: {}".format(value)) 
+        
+        if current_mode =="diff":
+            selector = self.range_diff.index(value)
+        elif current_mode =="lowmag":
+            selector = self.range_lowmag.index(value)
+        elif current_mode =="samag":
+            selector = self.range_samag.index(value)
+        elif current_mode =="mag1":
+            selector = self.range_mag1.index(value)
+        elif current_mode =="mag2":
+            selector = self.range_mag2.index(value)
+
+        return selector
 
     def setMagnificationIndex(self, index: int):
         current_mode = self.getFunctionMode()
 
-        if current_mode == "diff":
-            value = self.CAMERALENGTHS[index]
-        else:
-            value = self.MAGNIFICATIONS[index]
+        if index < 0:
+            raise ValueError(f"Cannot lower magnification (index={index})")
 
-        self.setMagnification(value)
+        self.eos3.SetSelector(index) 
+
+    def increaseMagnificationIndex(self) -> int:
+        """Increment the magnification index, status==0 on success"""
+        status = self.eos3.UpSelector()
+        return status
+
+    def decreaseMagnificationIndex(self) -> int:
+        """Decrement the magnification index, status==0 on success"""
+        status = self.eos3.DownSelector()
+        return status
+
+    def getMagnificationRanges(self):
+        """Get the magnification range for setting up the config"""
+        mag_ranges = {}
+        for i, mode in enumerate(self.FUNCTION_MODES):
+            self.eos3.SelectFunctionMode(i)
+            print(mode)
+            mags = []
+            ret = self.eos3.SetSelector(0)
+            while ret == 0:
+                mags.append(self.getMagnification())
+                ret = self.eos3.UpSelector()
+            print(mags)
+            mag_ranges[mode] = mags
+        
+        return mag_ranges
 
     def getGunShift(self) -> Tuple[int, int]:
         x, y, result = self.def3.GetGunA1()
@@ -364,8 +415,8 @@ class JeolMicroscope(object):
         value, result = self.def3.GetBeamBlank()
         return bool(value)
 
-    def setBeamBlank(self, mode):
-        """True/False or 1/0"""
+    def setBeamBlank(self, mode: bool):
+        """Enable beam blank (mode=True) or disable (mode=False)"""
         self.def3.SetBeamBlank(mode)
 
     def getCondensorLensStigmator(self) -> Tuple[int, int]:
@@ -395,7 +446,20 @@ class JeolMicroscope(object):
         return value + 1
 
     def setSpotSize(self, value: int):
+        """Set the spotsize"""
         self.eos3.selectSpotSize(value - 1)
+
+    def setProbeMode(self, mode: str):
+        """Set the probe mode
+        0: TEM, 1: EDS, 2: NBD, 3:CBD"""
+        value = {"TEM": 0, "EDS": 1, "NBD": 2, "CBD": 3}[mode]
+        self.eos3.selectProbeMode(val)
+
+    def getProbeMode(self) -> str:
+        """Gets the probe mode
+        0: TEM, 1: EDS, 2: NBD, 3:CBD"""
+        value, name, status = self.eos3.GetProbeMode()
+        return ("TEM", "EDS", "NBD", "CBD")[value]
 
     def getScreenPosition(self) -> str:
         value = self.screen2.GetAngle()[0]
@@ -485,96 +549,3 @@ class JeolMicroscope(object):
         print("IS2", self.def3.GetIS2())     # image shift 2
         print("OLs", self.def3.GetOLs())     # objective lens stigmator
         print("PLA", self.def3.GetPLA())     # projector lens alignment
-
-# lens3
-#  'GetCL1',
-#  'GetCL2',
-#  'GetCL3',
-#  'GetCM',
-#  'GetFLc',
-#  'GetFLcomp1',
-#  'GetFLcomp2',
-#  'GetFLf',
-#  'GetIDsOfNames',
-#  'GetIL1',
-#  'GetIL2',
-#  'GetIL3',
-#  'GetIL4',
-#  'GetOLc',
-#  'GetOLf',
-#  'GetOM',
-#  'GetOM2',
-#  'GetOM2Flag',
-#  'GetPL1',
-#  'GetPL2',
-#  'GetPL3',
-#  'GetTypeInfo',
-#  'GetTypeInfoCount',
-#  'Invoke',
-#  'QueryInterface',
-#  'Release',
-#  'SetCL3',
-#  'SetDiffFocus',
-#  'SetFLc',
-#  'SetFLf',
-#  'SetILFocus',
-#  'SetNtrl',
-#  'SetOLc',
-#  'SetOLf',
-#  'SetOM',
-#  'SetPLFocus',
-
-# def3
-#  'GetAngBal',
-#  'GetBeamBlank',
-#  'GetCLA1',
-#  'GetCLA2',
-#  'GetCLs',
-#  'GetDetAlign',
-#  'GetFLA1',
-#  'GetFLA2',
-#  'GetFLs1',
-#  'GetFLs2',
-#  'GetGunA1',
-#  'GetGunA2',
-#  'GetIDsOfNames',
-#  'GetILs',
-#  'GetIS1',
-#  'GetIS2',
-#  'GetOLs',
-#  'GetPLA',
-#  'GetScan1',
-#  'GetScan2',
-#  'GetShifBal',
-#  'GetSpotA',
-#  'GetStemIS',
-#  'GetTiltBal',
-#  'GetTypeInfo',
-#  'GetTypeInfoCount',
-#  'Invoke',
-#  'QueryInterface',
-#  'Release',
-#  'SetAngBal',
-#  'SetBeamBlank',
-#  'SetCLA1',
-#  'SetCLA2',
-#  'SetCLs',
-#  'SetDetAlign',
-#  'SetFLA1',
-#  'SetFLA2',
-#  'SetFLs1',
-#  'SetFLs2',
-#  'SetGunA1',
-#  'SetGunA2',
-#  'SetILs',
-#  'SetIS1',
-#  'SetIS2',
-#  'SetNtrl',
-#  'SetOLs',
-#  'SetPLA',
-#  'SetScan1',
-#  'SetScan2',
-#  'SetShifBal',
-#  'SetSpotA',
-#  'SetStemIS',
-#  'SetTiltBal',

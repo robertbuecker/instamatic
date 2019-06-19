@@ -2,6 +2,7 @@
 
 import sys, os
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 
 from instamatic.tools import *
@@ -158,14 +159,22 @@ class CalibStage(object):
         """
         return self._stagepos_to_pixelcoord(stagepos, image_pos, self.rotation, self.translation, self.reference_position)
 
+    def pixelshift_to_stageshift(self, pixelshift, binsize=1):
+        """Convert from a pixel distance to a stage shift"""
+        dx, dy = pixelshift
+        dx = (dx*binsize) + self.center_pixel[0]
+        dy = (dy*binsize) + self.center_pixel[1]
+        return self.pixelcoord_to_stagepos((dx, dy), image_pos=(0, 0))
+
     @classmethod
     def from_data(cls, shifts, stagepos, reference_position, camera_dimensions=None, header=None):
-        r, t = fit_affine_transformation(shifts, stagepos)
+        r, t = fit_affine_transformation(shifts, stagepos, verbose=True, translation=True)
 
         if not camera_dimensions:
-            camera_dimensions = header["ImageCameraDimensions"]
-        else:
-            raise NameError("name 'camera_dimensions' is not defined.")
+            if header:
+                camera_dimensions = header["ImageCameraDimensions"]
+            else:
+                raise NameError("name 'camera_dimensions' is not defined.")
 
         c = cls(rotation=r, camera_dimensions=camera_dimensions, translation=t, reference_position=reference_position)
         c.data_shifts = shifts
@@ -178,9 +187,9 @@ class CalibStage(object):
     @classmethod
     def from_file(cls, fn=CALIB_STAGE_LOWMAG):
         try:
-            return pickle.load(open(fn, "r"))
+            return pickle.load(open(fn, "rb"))
         except IOError as e:
-            prog = "instamatic.calibrate_stage_lowmag"
+            prog = "instamatic.calibrate_stage_lowmag/mag1"
             raise IOError("{}: {}. Please run {} first.".format(e.strerror, fn, prog))
 
     def to_file(self, fn=CALIB_STAGE_LOWMAG):
@@ -355,7 +364,7 @@ def calibrate_stage_lowmag_from_image_fn(center_fn, other_fn):
 
 def calibrate_stage_lowmag(center_fn=None, other_fn=None, ctrl=None, confirm=True, save_images=False):
     if not (center_fn or other_fn):
-        if confirm and not input("\n >> Go too 100x mag, and move the sample stage\nso that the grid center (clover) is in the\nmiddle of the image (type 'go'): """) == "go":
+        if confirm and not input("\n >> Go to 100x mag, and move the sample stage\nso that the grid center (clover) is in the\nmiddle of the image (type 'go'): """) == "go":
             return
         else:
             calib = calibrate_stage_lowmag_live(ctrl, save_images=True)
@@ -375,10 +384,10 @@ Program to calibrate lowmag (100x) of microscope
 
 Usage: 
 prepare
-    instamatic.calibrate100x
+    instamatic.calibrate_lowmag
         To start live calibration routine on the microscope
 
-    instamatic.calibrate100x CENTER_IMAGE (CALIBRATION_IMAGE ...)
+    instamatic.calibrate_lowmag CENTER_IMAGE (CALIBRATION_IMAGE ...)
        To perform calibration using pre-collected images
 """)
         exit()
