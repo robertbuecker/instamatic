@@ -3,6 +3,7 @@ import yaml
 from instamatic import config
 from pathlib import Path
 import shutil
+import numpy as np
 
 
 def get_tvips_calibs(ctrl, rng: list, mode: str, wavelength: float) -> dict:

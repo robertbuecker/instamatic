@@ -13,6 +13,8 @@ def get_tem(name: str):
         from .fei_microscope import FEIMicroscope as cls
     elif name == "fei_simu":
         from .fei_simu_microscope import FEISimuMicroscope as cls
+    elif name == "fei_tecnai":
+        from .fei_tecnai_microscope import FEITecnaiMicroscope as cls
     elif name == "simulate":
         from .simu_microscope import SimuMicroscope as cls
     else:
