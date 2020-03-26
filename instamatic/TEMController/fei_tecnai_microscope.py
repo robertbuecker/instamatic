@@ -212,7 +212,7 @@ class FEITecnaiMicroscope(object):
         axis = 0
         
         if speed > 1 or speed < 0:
-            raise ValueError("setStageSpeed value must be between 0 and 1. Input: {}".format(value))
+            raise ValueError("setStageSpeed value must be between 0 and 1. Input: {}".format(speed))
         
         if x is not None:
             pos.X = x * 1e-6
